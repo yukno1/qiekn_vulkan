@@ -1,0 +1,61 @@
+cmake_minimum_required(VERSION 3.31)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD 451f2fe2-a8a2-47c3-bc32-94786d8fc91b)
+set(CMAKE_CXX_MODULE_STD ON)
+
+project(vulkan)
+
+set(ENABLE_CPP20_MODULE ON)
+
+# using LLVM c++ stl implementation
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++23")
+
+# compile_commands.json
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+# ---------------dependencies-------------------------------------
+# glfw
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(GLFW_BUILD_EXAMPLES "Build the GLFW example programs" OFF)
+option(GLFW_BUILD_TESTS "Build the GLFW test programs" OFF)
+option(GLFW_BUILD_DOCS "Build the GLFW documentation" OFF)
+option(GLFW_INSTALL "Generate installation target" OFF)
+option(GLFW_BUILD_WIN32 "Build support for Win32" ON)
+add_subdirectory(${CMAKE_SOURCE_DIR}/deps/glfw)
+
+# glm
+add_subdirectory(${CMAKE_SOURCE_DIR}/deps/glm)
+
+# vulkan
+set(VULKAN_SDK_DIR "E:/VulkanSDK/1.4.341.0")
+set(VULKAN_INCLUDE_DIR "${VULKAN_SDK_DIR}/Include")
+set(VULKAN_LIBRARY "${VULKAN_SDK_DIR}/Lib/vulkan-1.lib")
+find_package(Vulkan REQUIRED)
+
+
+# -------------------targets------------------------------------------------
+file(GLOB_RECURSE SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+file(GLOB_RECURSE HEADER_FILES 
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/deps/tiny_obj_loader.h"
+)
+file(GLOB_RECURSE MODULE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cppm")
+
+add_executable(${PROJECT_NAME})
+target_sources(${PROJECT_NAME} PRIVATE ${SOURCE_FILES})
+target_sources(${PROJECT_NAME} PRIVATE FILE_SET CXX_MODULES FILES ${MODULE_FILES})
+
+target_include_directories(${PROJECT_NAME} PUBLIC include)
+
+target_link_libraries(${PROJECT_NAME} PUBLIC 
+    glfw
+    glm
+    Vulkan::Vulkan
+)
