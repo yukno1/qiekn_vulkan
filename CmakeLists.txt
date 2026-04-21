@@ -39,6 +39,9 @@ set(CMAKE_CXX_MODULE_STD ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 
 # vulkan
+# set(Vulkan_SDK "E:\\software\\msys64\\clang64")
+# set(Vulkan_LIBRARY "E:\\software\\msys64\\clang64\\lib\\libvulkan-1.dll.a")
+# set(Vulkan_INCLUDE_DIR "E:\\software\\msys64\\clang64\\include")
 find_package(Vulkan REQUIRED)
 
 # set up Vulkan C++ module (enabled when ENABLE_CPP20_MODULE=ON)
@@ -49,6 +52,7 @@ target_compile_definitions(VulkanCppModule PUBLIC
         VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
         VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
         VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING=1
+        VULKAN_HPP_NO_TO_STRING=1  # 让vulkan不要使用std::format, 在windows上会有undefined symbol
 )
 
 target_include_directories(VulkanCppModule PRIVATE "${Vulkan_INCLUDE_DIR}")
@@ -60,7 +64,9 @@ target_sources(VulkanCppModule
         FILE_SET cxx_modules TYPE CXX_MODULES
         BASE_DIRS 
             "${Vulkan_INCLUDE_DIR}"
-            "E:\\cpp_compiler\\llvm-mingw\\share\\libc++\\v1"  # where std.cppm is
+            "E:\\cpp_compiler\\llvm-mingw\\share\\libc++\\v1"
+            # "E:\\software\\msys64\\clang64\\share\\libc++\\v1"  # where std.cppm is
+            # "E:\\software\\msys64\\clang64\\lib" # where libc++.dll.a is
         FILES "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
               "${Vulkan_INCLUDE_DIR}/vulkan/vulkan_video.cppm"
 )
@@ -79,9 +85,10 @@ target_sources(${PROJECT_NAME} PRIVATE FILE_SET CXX_MODULES FILES ${MODULE_FILES
 
 target_include_directories(${PROJECT_NAME} PUBLIC include)
 
-target_link_libraries(${PROJECT_NAME} PUBLIC 
+target_link_libraries(${PROJECT_NAME} PUBLIC
     glfw
     glm
-    # Vulkan::Vulkan
     Vulkan::cppm
+    "$<$<LINK_LANGUAGE:CXX>:-lc++>"
+    "$<$<LINK_LANGUAGE:CXX>:-lc++abi>"
 )
