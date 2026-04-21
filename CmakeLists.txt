@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.31)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD 451f2fe2-a8a2-47c3-bc32-94786d8fc91b)
@@ -30,15 +31,39 @@ option(GLFW_INSTALL "Generate installation target" OFF)
 option(GLFW_BUILD_WIN32 "Build support for Win32" ON)
 add_subdirectory(${CMAKE_SOURCE_DIR}/deps/glfw)
 
-# glm
+# glm (disable C++ modules for this dependency)
+set(CMAKE_CXX_MODULE_STD OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 add_subdirectory(${CMAKE_SOURCE_DIR}/deps/glm)
+set(CMAKE_CXX_MODULE_STD ON)
+set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 
 # vulkan
-set(VULKAN_SDK_DIR "E:/VulkanSDK/1.4.341.0")
-set(VULKAN_INCLUDE_DIR "${VULKAN_SDK_DIR}/Include")
-set(VULKAN_LIBRARY "${VULKAN_SDK_DIR}/Lib/vulkan-1.lib")
 find_package(Vulkan REQUIRED)
 
+# set up Vulkan C++ module (enabled when ENABLE_CPP20_MODULE=ON)
+add_library(VulkanCppModule)
+add_library(Vulkan::cppm ALIAS VulkanCppModule)
+
+target_compile_definitions(VulkanCppModule PUBLIC
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+        VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+        VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING=1
+)
+
+target_include_directories(VulkanCppModule PRIVATE "${Vulkan_INCLUDE_DIR}")
+
+target_link_libraries(VulkanCppModule PUBLIC Vulkan::Vulkan)
+
+target_sources(VulkanCppModule
+        PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES
+        BASE_DIRS 
+            "${Vulkan_INCLUDE_DIR}"
+            "E:\\cpp_compiler\\llvm-mingw\\share\\libc++\\v1"  # where std.cppm is
+        FILES "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
+              "${Vulkan_INCLUDE_DIR}/vulkan/vulkan_video.cppm"
+)
 
 # -------------------targets------------------------------------------------
 file(GLOB_RECURSE SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
@@ -57,5 +82,6 @@ target_include_directories(${PROJECT_NAME} PUBLIC include)
 target_link_libraries(${PROJECT_NAME} PUBLIC 
     glfw
     glm
-    Vulkan::Vulkan
+    # Vulkan::Vulkan
+    Vulkan::cppm
 )
