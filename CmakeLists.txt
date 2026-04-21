@@ -90,5 +90,4 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     glm
     Vulkan::cppm
     "$<$<LINK_LANGUAGE:CXX>:-lc++>"
-    "$<$<LINK_LANGUAGE:CXX>:-lc++abi>"
 )
