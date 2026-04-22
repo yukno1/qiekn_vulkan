@@ -1,9 +1,13 @@
 import vulkan; // provides the functions, structures and enumerations
 import std;
+#define VK_USE_PLATFORM_WIN32_KHR
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
 
 // clang-format off
+#include <assert.h>
 #include <cstdlib>  // provides the EXIT_SUCCESS and EXIT_FAILURE macros
 // clang-format on
 
@@ -35,11 +39,19 @@ public:
 private:
   // store a reference to the actual window
   GLFWwindow *window;
+
   // the handle to the instance and the raii context:
   vk::raii::Context context;
   vk::raii::Instance instance = nullptr;
   vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+
   vk::raii::PhysicalDevice physicalDevice = nullptr;
+  vk::raii::Device device = nullptr;
+  // window surface
+  vk::raii::SurfaceKHR surface = nullptr;
+
+  vk::raii::Queue graphicsQueue = nullptr;
+
   std::vector<const char *> requiredDeviceExtension = {
       vk::KHRSwapchainExtensionName};
 
@@ -67,7 +79,33 @@ private:
     // application to the driver.
     createInstance();
     setupDebugMessenger();
+    createSurface();
     pickPhysicalDevice();
+    createLogicalDevice();
+  }
+
+  /**
+   * start rendering frames
+   */
+  void mainLoop() {
+    // To keep the application running until either an error occurs or the
+    // window is closed, we need to add an event loop.
+    // It loops and checks for events like pressing the X button until the user
+    // has closed the window.
+    // This is also the loop where we’ll later call a function to render a
+    // single frame.
+    while (!glfwWindowShouldClose(window)) {
+      glfwPollEvents();
+    }
+  }
+
+  /**
+   * deallocate the resources
+   */
+  void cleanup() {
+    glfwDestroyWindow(window);
+
+    glfwTerminate();
   }
 
   void createInstance() {
@@ -153,6 +191,67 @@ private:
     return extensions;
   }
 
+  void pickPhysicalDevice() {
+    std::vector<vk::raii::PhysicalDevice> physicalDevices =
+        instance.enumeratePhysicalDevices();
+    auto const devIter =
+        std::ranges::find_if(physicalDevices, [&](auto const &physicalDevice) {
+          return isDeviceSuitable(physicalDevice);
+        });
+    if (devIter == physicalDevices.end()) {
+      throw std::runtime_error("failed to find a suitable GPU!");
+    }
+    physicalDevice = *devIter;
+  }
+
+  void createLogicalDevice() {
+    // find the index of the first queue family that supports graphics
+    std::vector<vk::QueueFamilyProperties> queueFamilyProperties =
+        physicalDevice.getQueueFamilyProperties();
+
+    // get the first index into queueFamilyProperties which supports graphics
+    auto graphicsQueueFamilyProperty =
+        std::ranges::find_if(queueFamilyProperties, [](auto const &qfp) {
+          return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) !=
+                 static_cast<vk::QueueFlags>(0);
+        });
+    assert(graphicsQueueFamilyProperty != queueFamilyProperties.end() &&
+           "No graphics queue family found!");
+
+    auto graphicsIndex = static_cast<uint32_t>(std::distance(
+        queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
+
+    // query for Vulkan 1.3 features
+    vk::StructureChain<vk::PhysicalDeviceFeatures2,
+                       vk::PhysicalDeviceVulkan13Features,
+                       vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
+        featureChain = {
+            {}, // vk::PhysicalDeviceFeatures2
+            {.dynamicRendering =
+                 true}, // Enable dynamic rendering from Vulkan 1.3
+            {.extendedDynamicState =
+                 true} // Enable extended dynamic state from the extension
+        };
+
+    // create a Device
+    float queuePriority = 0.5f;
+    vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
+        .queueFamilyIndex = graphicsIndex,
+        .queueCount = 1,
+        .pQueuePriorities = &queuePriority};
+
+    vk::DeviceCreateInfo deviceCreateInfo{
+        .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &deviceQueueCreateInfo,
+        .enabledExtensionCount =
+            static_cast<uint32_t>(requiredDeviceExtension.size()),
+        .ppEnabledExtensionNames = requiredDeviceExtension.data()};
+
+    device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+    graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);
+  }
+
   void setupDebugMessenger() {
     if (!enableValidationLayers)
       return;
@@ -172,50 +271,12 @@ private:
         instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
   }
 
-  static VKAPI_ATTR vk::Bool32 VKAPI_CALL
-  debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
-                vk::DebugUtilsMessageTypeFlagsEXT type,
-                const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
-                void *pUserData) {
-    std::cerr << "validation layer: type "
-              << debugUtilsMessageTypeFlagsToString(type)
-              << " msg: " << pCallbackData->pMessage << std::endl;
-
-    return vk::False;
-  }
-
-  // 辅助函数
-  // vulkan.cppm 编译为模块时，ErrorCategoryImpl::message() 内部调用了 to_string
-  // → toHexString → std::format → __allocating_buffer。
-  // 模块 BMI 中这个析构函数没有被内联，变成了需要外部链接的符号，但 libc++.a
-  // 里没有它（因为本该内联）。
-  static std::string
-  debugUtilsMessageTypeFlagsToString(vk::DebugUtilsMessageTypeFlagsEXT flags) {
-    std::string result;
-    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral)
-      result += "General|";
-    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation)
-      result += "Validation|";
-    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance)
-      result += "Performance|";
-    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding)
-      result += "DeviceAddressBinding|";
-    if (!result.empty())
-      result.pop_back(); // 去掉末尾的 '|'
-    return result;
-  }
-
-  void pickPhysicalDevice() {
-    std::vector<vk::raii::PhysicalDevice> physicalDevices =
-        instance.enumeratePhysicalDevices();
-    auto const devIter =
-        std::ranges::find_if(physicalDevices, [&](auto const &physicalDevice) {
-          return isDeviceSuitable(physicalDevice);
-        });
-    if (devIter == physicalDevices.end()) {
-      throw std::runtime_error("failed to find a suitable GPU!");
+  void createSurface() {
+    VkSurfaceKHR _surface;
+    if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0) {
+      throw std::runtime_error("failed to create window surface!");
     }
-    physicalDevice = *devIter;
+    surface = vk::raii::SurfaceKHR(instance, _surface);
   }
 
   bool isDeviceSuitable(vk::raii::PhysicalDevice const &physicalDevice) {
@@ -260,28 +321,37 @@ private:
            supportsAllRequiredExtensions && supportsRequiredFeatures;
   }
 
-  /**
-   * start rendering frames
-   */
-  void mainLoop() {
-    // To keep the application running until either an error occurs or the
-    // window is closed, we need to add an event loop.
-    // It loops and checks for events like pressing the X button until the user
-    // has closed the window.
-    // This is also the loop where we’ll later call a function to render a
-    // single frame.
-    while (!glfwWindowShouldClose(window)) {
-      glfwPollEvents();
-    }
+  static VKAPI_ATTR vk::Bool32 VKAPI_CALL
+  debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+                vk::DebugUtilsMessageTypeFlagsEXT type,
+                const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                void *pUserData) {
+    std::cerr << "validation layer: type "
+              << debugUtilsMessageTypeFlagsToString(type)
+              << " msg: " << pCallbackData->pMessage << std::endl;
+
+    return vk::False;
   }
 
-  /**
-   * deallocate the resources
-   */
-  void cleanup() {
-    glfwDestroyWindow(window);
-
-    glfwTerminate();
+  // 辅助函数
+  // vulkan.cppm 编译为模块时，ErrorCategoryImpl::message() 内部调用了 to_string
+  // → toHexString → std::format → __allocating_buffer。
+  // 模块 BMI 中这个析构函数没有被内联，变成了需要外部链接的符号，但 libc++.a
+  // 里没有它（因为本该内联）。
+  static std::string
+  debugUtilsMessageTypeFlagsToString(vk::DebugUtilsMessageTypeFlagsEXT flags) {
+    std::string result;
+    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral)
+      result += "General|";
+    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation)
+      result += "Validation|";
+    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance)
+      result += "Performance|";
+    if (flags & vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding)
+      result += "DeviceAddressBinding|";
+    if (!result.empty())
+      result.pop_back(); // 去掉末尾的 '|'
+    return result;
   }
 };
 
