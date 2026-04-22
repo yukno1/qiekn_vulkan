@@ -54,6 +54,8 @@ target_compile_definitions(VulkanCppModule PUBLIC
         VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING=1
         VULKAN_HPP_NO_TO_STRING=1  # 让vulkan不要使用std::format, 在windows上会有undefined symbol
 )
+# set(Vulkan_INCLUDE_DIR "${Vulkan_SDK}/Include")
+message(STATUS "${Vulkan_INCLUDE_DIR}")
 
 target_include_directories(VulkanCppModule PRIVATE "${Vulkan_INCLUDE_DIR}")
 
@@ -89,5 +91,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     glfw
     glm
     Vulkan::cppm
-    "$<$<LINK_LANGUAGE:CXX>:-lc++>"
+    # "$<$<LINK_LANGUAGE:CXX>:-lc++>"
 )
+
+
+
