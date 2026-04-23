@@ -12,7 +12,14 @@ import std;
 #include <assert.h>
 #include <cstdlib>  // provides the EXIT_SUCCESS and EXIT_FAILURE macros
 #include <cstdint> // Necessary for uint32_t
+// #include <cstring>
+// #include <fstream>
 // #include <limits> // Necessary for std::numeric_limits, if not import std;
+// #include <iostream>
+// #include <limits>
+// #include <memory>
+// #include <stdexcept>
+// #include <vector>
 // clang-format on
 
 // It’s a good idea to use constants because we’ll be referring to these values
@@ -62,6 +69,8 @@ private:
     vk::SurfaceFormatKHR             swapChainSurfaceFormat;
     vk::Extent2D                     swapChainExtent;
     std::vector<vk::raii::ImageView> swapChainImageViews;
+
+    vk::raii::PipelineLayout pipelineLayout = nullptr;
 
     std::vector<const char*> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
@@ -128,6 +137,7 @@ private:
 
     void createInstance()
     {
+        std::cout << "Create Instance" << std::endl;
         // This data is technically optional, but it may provide some useful
         // information to the driver to optimize our specific application
         constexpr vk::ApplicationInfo appInfo{.pApplicationName   = "Hello Triangle",
@@ -194,6 +204,7 @@ private:
 
     void setupDebugMessenger()
     {
+        std::cout << "Set Up DebugMessenger" << std::endl;
         if (!enableValidationLayers) return;
 
         vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(
@@ -212,6 +223,7 @@ private:
 
     void createSurface()
     {
+        std::cout << "Create Surface" << std::endl;
         VkSurfaceKHR _surface;
         if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0)
         {
@@ -266,6 +278,7 @@ private:
 
     void pickPhysicalDevice()
     {
+        std::cout << "  Pick Physical Device" << std::endl;
         std::vector<vk::raii::PhysicalDevice> physicalDevices = instance.enumeratePhysicalDevices();
         auto const devIter = std::ranges::find_if(physicalDevices,
                                                   [&](auto const& physicalDevice)
@@ -279,6 +292,7 @@ private:
 
     void createLogicalDevice()
     {
+        std::cout << "Create Logical Device" << std::endl;
         // find the index of the first queue family that supports graphics
         std::vector<vk::QueueFamilyProperties> queueFamilyProperties =
             physicalDevice.getQueueFamilyProperties();
@@ -304,11 +318,13 @@ private:
 
         // query for Vulkan 1.3 features
         vk::StructureChain<vk::PhysicalDeviceFeatures2,
+                           vk::PhysicalDeviceVulkan11Features,
                            vk::PhysicalDeviceVulkan13Features,
                            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
             featureChain = {
-                {},                           // vk::PhysicalDeviceFeatures2
-                {.dynamicRendering = true},   // vk::PhysicalDeviceVulkan13Features
+                {},                                  // vk::PhysicalDeviceFeatures2
+                {.shaderDrawParameters = VK_TRUE},   // vk::PhysicalDeviceVulkan11Features
+                {.dynamicRendering = true},          // vk::PhysicalDeviceVulkan13Features
                 {.extendedDynamicState =
                      true}   // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
             };
@@ -330,6 +346,7 @@ private:
 
     void createSwapChain()
     {
+        std::cout << "Create Swap Chain" << std::endl;
         vk::SurfaceCapabilitiesKHR surfaceCapabilities =
             physicalDevice.getSurfaceCapabilitiesKHR(*surface);
         swapChainExtent        = chooseSwapExtent(surfaceCapabilities);
@@ -363,6 +380,7 @@ private:
 
     void createImageViews()
     {
+        std::cout << "Create ImageViews" << std::endl;
         assert(swapChainImageViews.empty());
 
         vk::ImageViewCreateInfo imageViewCreateInfo{
@@ -377,7 +395,81 @@ private:
         }
     }
 
-    void createGraphicsPipeline() {}
+    void createGraphicsPipeline()
+    {
+        std::cout << "Create GraphicsPipeline" << std::endl;
+        vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
+
+        vk::PipelineShaderStageCreateInfo vertShaderStageInfo{
+            .stage  = vk::ShaderStageFlagBits::eVertex,
+            .module = shaderModule,
+            .pName  = "vertMain"   // function to invoke, known as the entrypoint
+            // .pSpecializationInfo is optional, it allows you to specify values for shader
+            // constants
+        };
+
+        vk::PipelineShaderStageCreateInfo fragShaderStageInfo{
+            .stage  = vk::ShaderStageFlagBits::eFragment,
+            .module = shaderModule,
+            .pName  = "fragMain"};
+
+
+        vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo,
+                                                            fragShaderStageInfo};
+
+        // format of the vertex data that will be passed to the vertex shader
+        vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
+        vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
+            .topology = vk::PrimitiveTopology::eTriangleList};
+        vk::PipelineViewportStateCreateInfo viewportState{.viewportCount = 1, .scissorCount = 1};
+
+        std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport,
+                                                       vk::DynamicState::eScissor};
+
+        vk::PipelineDynamicStateCreateInfo dynamicState{
+            .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+            .pDynamicStates    = dynamicStates.data()};
+
+        vk::PipelineRasterizationStateCreateInfo rasterizer{
+            .depthClampEnable = vk::False,   // vk::True: fragments that are beyond the near and far
+                                             // planes are clamped to them.
+            .rasterizerDiscardEnable =
+                vk::False,   // vk::True: geometry never passes through the rasterizer stage
+            .polygonMode     = vk::PolygonMode::eFill,
+            .cullMode        = vk::CullModeFlagBits::eBack,
+            .frontFace       = vk::FrontFace::eClockwise,
+            .depthBiasEnable = vk::False,
+            .lineWidth       = 1.0f};
+
+        vk::PipelineMultisampleStateCreateInfo multisampling{
+            .rasterizationSamples = vk::SampleCountFlagBits::e1, .sampleShadingEnable = vk::False};
+
+        // color blending
+        vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+            .blendEnable    = vk::False,
+            .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                              vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
+
+        vk::PipelineColorBlendStateCreateInfo colorBlending{.logicOpEnable   = vk::False,
+                                                            .logicOp         = vk::LogicOp::eCopy,
+                                                            .attachmentCount = 1,
+                                                            .pAttachments = &colorBlendAttachment};
+
+        // pipeline layout
+        vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount         = 0,
+                                                        .pushConstantRangeCount = 0};
+
+        pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+    }
+
+    [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const
+    {
+        vk::ShaderModuleCreateInfo createInfo{.codeSize = code.size() * sizeof(char),
+                                              .pCode =
+                                                  reinterpret_cast<const uint32_t*>(code.data())};
+        vk::raii::ShaderModule     shaderModule{device, createInfo};
+        return shaderModule;
+    }
 
     uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& surfaceCapabilities)
     {
@@ -478,6 +570,22 @@ private:
             result += "DeviceAddressBinding|";
         if (!result.empty()) result.pop_back();   // 去掉末尾的 '|'
         return result;
+    }
+
+    static std::vector<char> readFile(const std::string& filename)
+    {
+        std::ifstream file(filename, std::ios::ate | std::ios::binary);
+
+        if (!file.is_open())
+        {
+            throw std::runtime_error("failed to open file!");
+        }
+        std::vector<char> buffer(file.tellg());
+        file.seekg(0, std::ios::beg);
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        file.close();
+
+        return buffer;
     }
 };
 
