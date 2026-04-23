@@ -95,6 +95,8 @@ private:
         pickPhysicalDevice();
         createLogicalDevice();
         createSwapChain();
+        createImageViews();
+        createGraphicsPipeline();
     }
 
     /**
@@ -217,6 +219,8 @@ private:
         }
         surface = vk::raii::SurfaceKHR(instance, _surface);
     }
+
+
 
     bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice)
     {
@@ -356,6 +360,24 @@ private:
         swapChain       = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
         swapChainImages = swapChain.getImages();
     }
+
+    void createImageViews()
+    {
+        assert(swapChainImageViews.empty());
+
+        vk::ImageViewCreateInfo imageViewCreateInfo{
+            .viewType         = vk::ImageViewType::e2D,
+            .format           = swapChainSurfaceFormat.format,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+
+        for (auto& image : swapChainImages)
+        {
+            imageViewCreateInfo.image = image;
+            swapChainImageViews.emplace_back(device, imageViewCreateInfo);
+        }
+    }
+
+    void createGraphicsPipeline() {}
 
     uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& surfaceCapabilities)
     {
