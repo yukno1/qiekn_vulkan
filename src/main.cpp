@@ -77,6 +77,10 @@ private:
     vk::raii::CommandPool   commandPool   = nullptr;
     vk::raii::CommandBuffer commandBuffer = nullptr;
 
+    vk::raii::Semaphore presentCompleteSemaphore = nullptr;
+    vk::raii::Semaphore renderFinishedSemaphore  = nullptr;
+    vk::raii::Fence     drawFence                = nullptr;
+
     std::vector<const char*> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
     void initWindow()
@@ -113,6 +117,7 @@ private:
         createGraphicsPipeline();
         createCommandPool();
         createCommandBuffer();
+        createSyncObjects();
     }
 
     /**
@@ -129,7 +134,9 @@ private:
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
+            drawFrame();
         }
+        device.waitIdle();
     }
 
     /**
@@ -589,6 +596,58 @@ private:
         vk::DependencyInfo dependency_info = {
             .dependencyFlags = {}, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier};
         commandBuffer.pipelineBarrier2(dependency_info);
+    }
+
+    void createSyncObjects()
+    {
+        presentCompleteSemaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
+        renderFinishedSemaphore  = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
+        drawFence = vk::raii::Fence(device, {.flags = vk::FenceCreateFlagBits::eSignaled});
+    }
+
+    void drawFrame()
+    {
+        auto fenceResult = device.waitForFences(*drawFence, vk::True, UINT64_MAX);
+        if (fenceResult != vk::Result::eSuccess)
+        {
+            throw std::runtime_error("failed to wait for fence!");
+        }
+        device.resetFences(*drawFence);
+
+        auto [result, imageIndex] =
+            swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphore, nullptr);
+
+        recordCommandBuffer(imageIndex);
+
+        queue.waitIdle();   // NOTE: for simplicity, wait for the queue to be idle before starting
+                            // the frame. In the next chapter you see how to use multiple frames in
+                            // flight and fences to sync
+
+        vk::PipelineStageFlags waitDestinationStageMask(
+            vk::PipelineStageFlagBits::eColorAttachmentOutput);
+        const vk::SubmitInfo submitInfo{.waitSemaphoreCount   = 1,
+                                        .pWaitSemaphores      = &*presentCompleteSemaphore,
+                                        .pWaitDstStageMask    = &waitDestinationStageMask,
+                                        .commandBufferCount   = 1,
+                                        .pCommandBuffers      = &*commandBuffer,
+                                        .signalSemaphoreCount = 1,
+                                        .pSignalSemaphores    = &*renderFinishedSemaphore};
+        queue.submit(submitInfo, *drawFence);
+
+        const vk::PresentInfoKHR presentInfoKHR{.waitSemaphoreCount = 1,
+                                                .pWaitSemaphores    = &*renderFinishedSemaphore,
+                                                .swapchainCount     = 1,
+                                                .pSwapchains        = &*swapChain,
+                                                .pImageIndices      = &imageIndex};
+        result = queue.presentKHR(presentInfoKHR);
+        switch (result)
+        {
+        case vk::Result::eSuccess: break;
+        case vk::Result::eSuboptimalKHR:
+            std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
+            break;
+        default: break;   // an unexpected result is returned!
+        }
     }
 
     [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const
