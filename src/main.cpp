@@ -52,17 +52,18 @@ public:
     // them
 private:
     // store a reference to the actual window
-    GLFWwindow* window;
+    GLFWwindow* window = nullptr;
 
     // the handle to the instance and the raii context:
     vk::raii::Context                context;
     vk::raii::Instance               instance       = nullptr;
     vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
 
-    vk::raii::PhysicalDevice physicalDevice = nullptr;
-    vk::raii::Device         device         = nullptr;
     // window surface
     vk::raii::SurfaceKHR surface = nullptr;
+
+    vk::raii::PhysicalDevice physicalDevice = nullptr;
+    vk::raii::Device         device         = nullptr;
 
     uint32_t        queueIndex = ~0;
     vk::raii::Queue queue      = nullptr;
@@ -84,6 +85,8 @@ private:
     std::vector<vk::raii::Fence>     inFlightFences;
     uint32_t                         frameIndex = 0;
 
+    bool framebufferResized = false;
+
     std::vector<const char*> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
     void initWindow()
@@ -95,14 +98,23 @@ private:
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         // Because handling resized windows takes special care that we’ll look into
         // later, disable it for now
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
         // initialize the window
         // The 4th parameter allows you to optionally specify a monitor to open the
         // window on.
         // The 5th parameter is only relevant to OpenGL.
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
+
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+    {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
+    }
+
     void initVulkan()
     {
         // The very first thing you need to do is initialize the Vulkan library by
@@ -398,6 +410,30 @@ private:
         swapChainImages = swapChain.getImages();
     }
 
+    void cleanupSwapChain()
+    {
+        swapChainImageViews.clear();
+        swapChain = nullptr;
+    }
+
+    void recreateSwapChain()
+    {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0)
+        {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+
+        device.waitIdle();
+
+        cleanupSwapChain();
+
+        createSwapChain();
+        createImageViews();
+    }
+
     void createImageViews()
     {
         std::cout << "Create ImageViews" << std::endl;
@@ -520,7 +556,6 @@ private:
 
     void recordCommandBuffer(uint32_t imageIndex)
     {
-        std::cout << "Recording Command Buffer" << std::endl;
         auto& commandBuffer = commandBuffers[frameIndex];
         commandBuffer.begin({});
 
@@ -637,6 +672,24 @@ private:
         auto [result, imageIndex] =
             swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
 
+        // Due to VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS being defined, eErrorOutOfDateKHR
+        // can be checked as a result here and does not need to be caught by an exception.
+        if (result == vk::Result::eErrorOutOfDateKHR)
+        {
+            recreateSwapChain();
+            return;
+        }
+        // On other success codes than eSuccess and eSuboptimalKHR we just throw an exception.
+        // On any error code, aquireNextImage already threw an exception.
+        if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+        {
+            assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
+            throw std::runtime_error("failed to acquire swap chain image!");
+        }
+
+        // Only reset the fence if we are submitting work
+        device.resetFences(*inFlightFences[frameIndex]);
+
         commandBuffers[frameIndex].reset();
         recordCommandBuffer(imageIndex);
 
@@ -659,13 +712,19 @@ private:
                                                 .pSwapchains    = &*swapChain,
                                                 .pImageIndices  = &imageIndex};
         result = queue.presentKHR(presentInfoKHR);
-        switch (result)
+        // Due to VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS being defined, eErrorOutOfDateKHR
+        // can be checked as a result here and does not need to be caught by an exception.
+        if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) ||
+            framebufferResized)
         {
-        case vk::Result::eSuccess: break;
-        case vk::Result::eSuboptimalKHR:
-            std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
-            break;
-        default: break;   // an unexpected result is returned!
+            framebufferResized = false;
+            recreateSwapChain();
+        }
+        else
+        {
+            // There are no other success codes than eSuccess; on any error code, presentKHR already
+            // threw an exception.
+            assert(result == vk::Result::eSuccess);
         }
         frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
     }
