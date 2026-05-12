@@ -1,3 +1,4 @@
+#include <utility>
 #define VK_USE_PLATFORM_WIN32_KHR
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -62,7 +63,7 @@ struct Vertex
     }
 };
 
-const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
                                       {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
                                       {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
 
@@ -106,11 +107,11 @@ private:
     vk::raii::PipelineLayout pipelineLayout   = nullptr;
     vk::raii::Pipeline       graphicsPipeline = nullptr;
 
-    vk::raii::CommandPool                commandPool = nullptr;
-    std::vector<vk::raii::CommandBuffer> commandBuffers;
-
     vk::raii::Buffer       vertexBuffer       = nullptr;
     vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+
+    vk::raii::CommandPool                commandPool = nullptr;
+    std::vector<vk::raii::CommandBuffer> commandBuffers;
 
     std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
     std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
@@ -584,26 +585,41 @@ private:
         commandPool = vk::raii::CommandPool(device, poolInfo);
     }
 
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(
+        vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties)
+    {
+        vk::BufferCreateInfo bufferInfo{
+            .size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
+        vk::raii::Buffer       buffer          = vk::raii::Buffer(device, bufferInfo);
+        vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+        vk::MemoryAllocateInfo allocInfo{
+            .allocationSize  = memRequirements.size,
+            .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+        vk::raii::DeviceMemory bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
+        buffer.bindMemory(*bufferMemory, 0);
+        return {std::move(buffer), std::move(bufferMemory)};
+    }
+
     void createVertexBuffer()
     {
-        vk::BufferCreateInfo bufferInfo{.size        = sizeof(vertices[0]) * vertices.size(),
-                                        .usage       = vk::BufferUsageFlagBits::eVertexBuffer,
-                                        .sharingMode = vk::SharingMode::eExclusive};
-        vertexBuffer = vk::raii::Buffer(device, bufferInfo);
 
-        vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();
-        vk::MemoryAllocateInfo memoryAllocateInfo{
-            .allocationSize  = memRequirements.size,
-            .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-                                              vk::MemoryPropertyFlagBits::eHostVisible |
-                                                  vk::MemoryPropertyFlagBits::eHostCoherent)};
-        vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
+        vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-        vertexBuffer.bindMemory(*vertexBufferMemory, 0);
+        auto [stagingBuffer, stagingBufferMemory] = createBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
-        void* data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
-        memcpy(data, vertices.data(), bufferInfo.size);
-        vertexBufferMemory.unmapMemory();
+        void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+        memcpy(dataStaging, vertices.data(), bufferSize);
+        stagingBufferMemory.unmapMemory();
+
+        std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+        copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
     }
 
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
@@ -692,6 +708,22 @@ private:
         commandBuffer.end();
     }
 
+    void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size)
+    {
+        vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool,
+                                                .level       = vk::CommandBufferLevel::ePrimary,
+                                                .commandBufferCount = 1};
+        vk::raii::CommandBuffer       commandCopyBuffer =
+            std::move(device.allocateCommandBuffers(allocInfo).front());
+        commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+        commandCopyBuffer.end();
+        queue.submit(
+            vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer},
+            nullptr);
+        queue.waitIdle();
+    }
+
     void transition_image_layout(uint32_t imageIndex, vk::ImageLayout old_layout,
                                  vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask,
                                  vk::AccessFlags2        dst_access_mask,
@@ -745,7 +777,6 @@ private:
         {
             throw std::runtime_error("failed to wait for fence!");
         }
-        device.resetFences(*inFlightFences[frameIndex]);
 
         auto [result, imageIndex] =
             swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
