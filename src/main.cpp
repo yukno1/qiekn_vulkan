@@ -5,6 +5,7 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 import vulkan; // provides the functions, structures and enumerations
 import std;
@@ -15,6 +16,7 @@ import std;
 #include <assert.h>
 #include <cstdlib>  // provides the EXIT_SUCCESS and EXIT_FAILURE macros
 #include <cstdint> // Necessary for uint32_t
+// #include <chrono>
 // #include <cstring>
 // #include <fstream>
 // #include <limits> // Necessary for std::numeric_limits, if not import std;
@@ -63,6 +65,13 @@ struct Vertex
     }
 };
 
+struct UniformBufferObject
+{
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+};
+
 const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
                                       {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
                                       {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
@@ -107,13 +116,18 @@ private:
     vk::Extent2D                     swapChainExtent;
     std::vector<vk::raii::ImageView> swapChainImageViews;
 
-    vk::raii::PipelineLayout pipelineLayout   = nullptr;
-    vk::raii::Pipeline       graphicsPipeline = nullptr;
+    vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+    vk::raii::PipelineLayout      pipelineLayout      = nullptr;
+    vk::raii::Pipeline            graphicsPipeline    = nullptr;
 
     vk::raii::Buffer       vertexBuffer       = nullptr;
     vk::raii::DeviceMemory vertexBufferMemory = nullptr;
     vk::raii::Buffer       indexBuffer        = nullptr;
     vk::raii::DeviceMemory indexBufferMemory  = nullptr;
+
+    std::vector<vk::raii::Buffer>       uniformBuffers;
+    std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
+    std::vector<void*>                  uniformBuffersMapped;
 
     vk::raii::CommandPool                commandPool = nullptr;
     std::vector<vk::raii::CommandBuffer> commandBuffers;
@@ -167,10 +181,12 @@ private:
         createLogicalDevice();
         createSwapChain();
         createImageViews();
+        createDescriptorSetLayout();
         createGraphicsPipeline();
         createCommandPool();
         createVertexBuffer();
         createIndexBuffer();
+        createUniformBuffers();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -491,6 +507,18 @@ private:
         }
     }
 
+    void createDescriptorSetLayout()
+    {
+        vk::DescriptorSetLayoutBinding uboLayoutBinding{
+            .binding         = 0,
+            .descriptorType  = vk::DescriptorType::eUniformBuffer,
+            .descriptorCount = 1,
+            .stageFlags      = vk::ShaderStageFlagBits::eVertex};
+        vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1,
+                                                     .pBindings    = &uboLayoutBinding};
+        descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
+    }
+
     void createGraphicsPipeline()
     {
         std::cout << "Create GraphicsPipeline" << std::endl;
@@ -558,8 +586,8 @@ private:
                                                             .pAttachments = &colorBlendAttachment};
 
         // pipeline layout
-        vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount         = 0,
-                                                        .pushConstantRangeCount = 0};
+        vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+            .setLayoutCount = 1, .pSetLayouts = &*descriptorSetLayout, .pushConstantRangeCount = 0};
 
         pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
@@ -647,6 +675,21 @@ private:
             vk::MemoryPropertyFlagBits::eDeviceLocal);
 
         copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+    }
+
+    void createUniformBuffers()
+    {
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
+            auto [buffer, bufferMem]  = createBuffer(bufferSize,
+                                                     vk::BufferUsageFlagBits::eUniformBuffer,
+                                                     vk::MemoryPropertyFlagBits::eHostVisible |
+                                                         vk::MemoryPropertyFlagBits::eHostCoherent);
+            uniformBuffers.emplace_back(std::move(buffer));
+            uniformBuffersMemory.emplace_back(std::move(bufferMem));
+            uniformBuffersMapped.emplace_back(uniformBuffersMemory.back().mapMemory(0, bufferSize));
+        }
     }
 
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
@@ -797,6 +840,30 @@ private:
         }
     }
 
+    void updateUniformBuffer(uint32_t currentImage)
+    {
+        static auto startTime = std::chrono::high_resolution_clock::now();
+
+        auto  currentTime = std::chrono::high_resolution_clock::now();
+        float time =
+            std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime)
+                .count();
+
+        UniformBufferObject ubo{};
+        ubo.model =
+            rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.view = lookAt(
+            glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.proj = glm::perspective(
+            glm::radians(45.0f),
+            static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height),
+            0.1f,
+            10.0f);
+        ubo.proj[1][1] *= -1;
+
+        memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+    }
+
     void drawFrame()
     {
         // Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are indexed by
@@ -824,6 +891,7 @@ private:
             assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
             throw std::runtime_error("failed to acquire swap chain image!");
         }
+        updateUniformBuffer(frameIndex);
 
         // Only reset the fence if we are submitting work
         device.resetFences(*inFlightFences[frameIndex]);
