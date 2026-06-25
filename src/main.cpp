@@ -63,9 +63,12 @@ struct Vertex
     }
 };
 
-const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-                                      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-                                      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
 class HelloTriangleApplication
 {
@@ -109,6 +112,8 @@ private:
 
     vk::raii::Buffer       vertexBuffer       = nullptr;
     vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+    vk::raii::Buffer       indexBuffer        = nullptr;
+    vk::raii::DeviceMemory indexBufferMemory  = nullptr;
 
     vk::raii::CommandPool                commandPool = nullptr;
     std::vector<vk::raii::CommandBuffer> commandBuffers;
@@ -165,6 +170,7 @@ private:
         createGraphicsPipeline();
         createCommandPool();
         createVertexBuffer();
+        createIndexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -622,6 +628,27 @@ private:
         copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
     }
 
+    void createIndexBuffer()
+    {
+        vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+        auto [stagingBuffer, stagingBufferMemory] = createBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        void* data = stagingBufferMemory.mapMemory(0, bufferSize);
+        memcpy(data, indices.data(), (size_t)bufferSize);
+        stagingBufferMemory.unmapMemory();
+
+        std::tie(indexBuffer, indexBufferMemory) = createBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+        copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+    }
+
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
     {
         vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
@@ -693,7 +720,9 @@ private:
                                                1.0f));
         commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
         commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
+        commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint16);
         commandBuffer.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+        commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
         commandBuffer.endRendering();
 
         // After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
