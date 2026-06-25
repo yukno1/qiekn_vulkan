@@ -129,6 +129,9 @@ private:
     std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
     std::vector<void*>                  uniformBuffersMapped;
 
+    vk::raii::DescriptorPool             descriptorPool = nullptr;
+    std::vector<vk::raii::DescriptorSet> descriptorSets;
+
     vk::raii::CommandPool                commandPool = nullptr;
     std::vector<vk::raii::CommandBuffer> commandBuffers;
 
@@ -187,6 +190,8 @@ private:
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
+        createDescriptorPool();
+        createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -509,6 +514,7 @@ private:
 
     void createDescriptorSetLayout()
     {
+        std::cout << "Create DescriptorSetLayout" << std::endl;
         vk::DescriptorSetLayoutBinding uboLayoutBinding{
             .binding         = 0,
             .descriptorType  = vk::DescriptorType::eUniformBuffer,
@@ -567,7 +573,7 @@ private:
                 vk::False,   // vk::True: geometry never passes through the rasterizer stage
             .polygonMode     = vk::PolygonMode::eFill,
             .cullMode        = vk::CullModeFlagBits::eBack,
-            .frontFace       = vk::FrontFace::eClockwise,
+            .frontFace       = vk::FrontFace::eCounterClockwise,
             .depthBiasEnable = vk::False,
             .lineWidth       = 1.0f};
 
@@ -636,7 +642,7 @@ private:
 
     void createVertexBuffer()
     {
-
+        std::cout << "Creating Vertex Buffer" << std::endl;
         vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
         auto [stagingBuffer, stagingBufferMemory] = createBuffer(
@@ -658,6 +664,7 @@ private:
 
     void createIndexBuffer()
     {
+        std::cout << "Creating Index Buffer" << std::endl;
         vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
         auto [stagingBuffer, stagingBufferMemory] = createBuffer(
@@ -679,6 +686,7 @@ private:
 
     void createUniformBuffers()
     {
+        std::cout << "Creating Uniform Buffers" << std::endl;
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
             vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
@@ -689,6 +697,45 @@ private:
             uniformBuffers.emplace_back(std::move(buffer));
             uniformBuffersMemory.emplace_back(std::move(bufferMem));
             uniformBuffersMapped.emplace_back(uniformBuffersMemory.back().mapMemory(0, bufferSize));
+        }
+    }
+
+    void createDescriptorPool()
+    {
+        std::cout << "Creating Descriptor Pool" << std::endl;
+        vk::DescriptorPoolSize       poolSize{.type            = vk::DescriptorType::eUniformBuffer,
+                                              .descriptorCount = MAX_FRAMES_IN_FLIGHT};
+        vk::DescriptorPoolCreateInfo poolInfo{
+            .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+            .maxSets       = MAX_FRAMES_IN_FLIGHT,
+            .poolSizeCount = 1,
+            .pPoolSizes    = &poolSize};
+        descriptorPool = vk::raii::DescriptorPool(device, poolInfo);
+    }
+
+    void createDescriptorSets()
+    {
+        std::cout << "Creating Descriptor Sets" << std::endl;
+        std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
+        vk::DescriptorSetAllocateInfo        allocInfo{.descriptorPool = descriptorPool,
+                                                       .descriptorSetCount =
+                                                           static_cast<uint32_t>(layouts.size()),
+                                                       .pSetLayouts = layouts.data()};
+
+        descriptorSets = device.allocateDescriptorSets(allocInfo);
+
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            vk::DescriptorBufferInfo bufferInfo{
+                .buffer = uniformBuffers[i], .offset = 0, .range = sizeof(UniformBufferObject)};
+            vk::WriteDescriptorSet descriptorWrite{.dstSet          = descriptorSets[i],
+                                                   .dstBinding      = 0,
+                                                   .dstArrayElement = 0,
+                                                   .descriptorCount = 1,
+                                                   .descriptorType =
+                                                       vk::DescriptorType::eUniformBuffer,
+                                                   .pBufferInfo = &bufferInfo};
+            device.updateDescriptorSets(descriptorWrite, {});
         }
     }
 
@@ -710,6 +757,7 @@ private:
     void createCommandBuffers()
     {
         std::cout << "Creating Command Buffer" << std::endl;
+        commandBuffers.clear();
         vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool,
                                                 .level       = vk::CommandBufferLevel::ePrimary,
                                                 .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
@@ -763,8 +811,13 @@ private:
                                                1.0f));
         commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
         commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
-        commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint16);
-        commandBuffer.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+        commandBuffer.bindIndexBuffer(
+            *indexBuffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                         pipelineLayout,
+                                         0,
+                                         *descriptorSets[frameIndex],
+                                         nullptr);
         commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
         commandBuffer.endRendering();
 
@@ -937,14 +990,13 @@ private:
 
     [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const
     {
-        vk::ShaderModuleCreateInfo createInfo{.codeSize = code.size() * sizeof(char),
-                                              .pCode =
-                                                  reinterpret_cast<const uint32_t*>(code.data())};
-        vk::raii::ShaderModule     shaderModule{device, createInfo};
+        vk::ShaderModuleCreateInfo createInfo{
+            .codeSize = code.size(), .pCode = reinterpret_cast<const uint32_t*>(code.data())};
+        vk::raii::ShaderModule shaderModule{device, createInfo};
         return shaderModule;
     }
 
-    uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& surfaceCapabilities)
+    static uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const& surfaceCapabilities)
     {
         auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);
         if ((0 < surfaceCapabilities.maxImageCount) &&

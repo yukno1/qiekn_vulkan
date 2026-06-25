@@ -73,6 +73,31 @@ target_sources(VulkanCppModule
               "${Vulkan_INCLUDE_DIR}/vulkan/vulkan_video.cppm"
 )
 
+# -------compile shaders---------------------------------
+find_program(SLANGC_EXECUTABLE 
+    NAMES slangc 
+    HINTS ENV VULKAN_SDK 
+    PATH_SUFFIXES bin
+)
+
+if(NOT SLANGC_EXECUTABLE)
+    message(FATAL_ERROR "slangc not found! Please check your VULKAN_SDK environment variable.")
+endif()
+
+set(SHADER_SRC ${CMAKE_SOURCE_DIR}/shaders/shader.slang)
+set(SHADER_DST ${CMAKE_SOURCE_DIR}/shaders/slang.spv)
+
+add_custom_command(
+    OUTPUT ${SHADER_DST}
+    # 直接调用 glslc，CMake 会自动处理路径和引号
+    COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SRC} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -o ${SHADER_DST}
+    DEPENDS ${SHADER_SRC}
+    COMMENT "Compiling shader: ${SHADER_SRC}"
+    VERBATIM
+)
+
+add_custom_target(Shaders ALL DEPENDS ${SHADER_DST})
+
 # -------------------targets------------------------------------------------
 file(GLOB_RECURSE SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 file(GLOB_RECURSE HEADER_FILES 
