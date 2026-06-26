@@ -1,8 +1,9 @@
 {
   "clangd.path": "E:/cpp_compiler/llvm-mingw/bin/clangd.exe",
-  "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+  "editor.defaultFormatter": "xaver.clang-format",
   "C_Cpp.clang_format_path": "E:/cpp_compiler/llvm-mingw/bin/clang-format.exe",
-  "[cpp]": {
-    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
-  }
+  "clangd.arguments": [
+    // "--experimental-modules-support",
+    "--background-index"
+  ]
 }

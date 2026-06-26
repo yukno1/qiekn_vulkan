@@ -1,0 +1,9 @@
+CompileFlags:
+  Compiler: E:/cpp_compiler/llvm-mingw/bin/clang++.exe
+  Add:
+    - -std=c++23
+    - -stdlib=libc++
+    - -Ie:/Workspace/qiekn/vulkan/deps
+    - -Ie:/Workspace/qiekn/vulkan/deps/glm
+Index:
+  Background: Build
